@@ -51,8 +51,6 @@ limiter = Limiter(
 
 with app.app_context():
     db.create_all()
-
-
 # ----------------------- Models -----------------------
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
