@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-import random
+import secrets
 from functools import wraps
 from dotenv import load_dotenv
 load_dotenv() # Memuat variabel dari file .env
@@ -19,22 +19,24 @@ from wtforms import StringField, PasswordField, DecimalField, IntegerField, Text
 from wtforms.validators import DataRequired, Email, Length, NumberRange, Regexp
 
 # ----------------------- Configuration -----------------------
-DATABASE_URL = os.environ.get('DATABASE_URL') or 'sqlite:///parfume_demo.db'
-# Untuk PythonAnywhere, lebih aman menggunakan path absolut.
-# Ganti 'your_username' dengan username PythonAnywhere Anda.
-PA_USERNAME = os.environ.get('PA_USERNAME', 'your_username')
-DATABASE_PATH = f'/home/{PA_USERNAME}/parfume_demo.db'
-DATABASE_URL = os.environ.get('DATABASE_URL') or f'sqlite:///{DATABASE_PATH}'
+# Variabel ini tidak lagi digunakan secara langsung untuk URI database, tapi bisa dipertahankan untuk referensi atau kegunaan lain.
+# DATABASE_URL = os.environ.get('DATABASE_URL') or 'sqlite:///parfume_demo.db'
 SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key'
 WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER') or ''
 SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
 FLASK_DEBUG = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8) # A07: Session Management
 app.config['SECRET_KEY'] = SECRET_KEY
+
+# Konfigurasi keamanan tambahan untuk cookie di lingkungan produksi
+if not FLASK_DEBUG:
+    app.config['SESSION_COOKIE_SECURE'] = True  # Hanya kirim cookie melalui HTTPS
+    app.config['SESSION_COOKIE_HTTPONLY'] = True # Mencegah akses cookie dari JavaScript
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax' # Melindungi dari CSRF
 
 db = SQLAlchemy(app)
 csrf = CSRFProtect(app)
@@ -43,6 +45,9 @@ limiter = Limiter(
     app=app,
     default_limits=["100 per day", "10 per hour"]
 )
+
+with app.app_context():
+    db.create_all()
 
 # ----------------------- Models -----------------------
 class User(db.Model):
@@ -111,7 +116,7 @@ class RegisterForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired(), Length(min=3, max=80)])
     email = StringField('Email', validators=[DataRequired(), Email()])
     password = PasswordField('Password', validators=[DataRequired(), Length(min=8), Regexp(
-        r'^(?=.[a-z])(?=.[A-Z])(?=.\d)(?=.[@$!%?&])[A-Za-z\d@$!%?&]+$',
+        r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$',
         message="Password harus mengandung huruf besar, huruf kecil, angka, dan simbol.")]) # A07: Password Strength
 
 class LoginForm(FlaskForm):
@@ -238,14 +243,24 @@ def register():
         username = form.username.data.strip()
         email = form.email.data.strip().lower()
         password = form.password.data
+        
+        # Cek apakah ini user pertama yang mendaftar
+        is_first_user = User.query.count() == 0
+        
         if User.query.filter((User.username==username)|(User.email==email)).first():
             flash('Username atau email sudah digunakan.', 'danger')
             return redirect(url_for('register'))
-        user = User(username=username, email=email)
+        # Jadikan user pertama sebagai superadmin, selain itu sebagai user biasa
+        if is_first_user:
+            user = User(username=username, email=email, role='superadmin', is_admin=True)
+            flash('Akun Super Admin berhasil dibuat. Anda adalah pengguna pertama!', 'success')
+        else:
+            user = User(username=username, email=email) # Role akan default ke 'user'
+            flash('Akun dibuat. Silakan login.', 'success')
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
-        flash('Akun dibuat. Silakan login.', 'success')
+       
         return redirect(url_for('login'))
     return render_template('register.html', form=form)
 
@@ -259,7 +274,7 @@ def login():
         user = User.query.filter((User.username==identifier)|(User.email==identifier)).first()
         if user and user.check_password(password):
             # --- START: 2FA Logic ---
-            otp = str(random.randint(100000, 999999))
+            otp = str(secrets.randbelow(900000) + 100000) # Menghasilkan angka 6 digit yang aman
             user.two_factor_code = otp
             user.two_factor_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
             db.session.commit()
@@ -324,7 +339,7 @@ def resend_2fa():
         return jsonify({'success': False, 'message': 'User tidak ditemukan.'}), 404
 
     # Buat dan kirim kode baru
-    otp = str(random.randint(100000, 999999))
+    otp = str(secrets.randbelow(900000) + 100000) # Menghasilkan angka 6 digit yang aman
     user.two_factor_code = otp
     user.two_factor_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     db.session.commit()
@@ -595,68 +610,6 @@ def superadmin_set_role(user_id, new_role):
     flash(f'Role {user.username} telah diubah menjadi {new_role}.', 'success')
     return redirect(url_for('superadmin_manage_users'))
 
-# ----------------------- Utilities -----------------------
-def ensure_admin():
-    # ====================================================
-    # 1. CREATE SUPERADMIN DEFAULT
-    # ====================================================
-    superadmin = User.query.filter_by(role="superadmin").first()
-    if not superadmin:
-        superadmin = User(
-            username='superadmin',
-            email='superadmin@example.com',
-            role='superadmin',
-            is_admin=True
-        )
-        superadmin.set_password('super123')
-        db.session.add(superadmin)
-        db.session.commit()
-        print('Created default SUPERADMIN -> superadmin / super123')
-    else:
-        print("SUPERADMIN already exists, skip creation.")
-
-
-    # ====================================================
-    # 2. CREATE ADMIN DEFAULT (CEK BERDASARKAN USERNAME)
-    # ====================================================
-    existing_admin = User.query.filter_by(username="admin").first()
-
-    if not existing_admin:
-        admin = User(
-            username='admin',
-            email='admin@example.com',
-            role='admin',
-            is_admin=True
-        )
-        admin.set_password('admin123')
-        db.session.add(admin)
-        db.session.commit()
-        print('Created default ADMIN -> admin / admin123')
-    else:
-        print("ADMIN already exists, skip creating default admin.")
-
-
-    # ====================================================
-    # 3. MIGRATE USER LAMA YANG is_admin=True MENJADI role='admin'
-    # ====================================================
-    try:
-        legacy_admins = User.query.filter(
-            User.is_admin == True,
-            User.role == 'user'
-        ).all()
-
-        for la in legacy_admins:
-            la.role = 'admin'
-
-        if legacy_admins:
-            db.session.commit()
-            print(f'Migrated {len(legacy_admins)} legacy admins to role=admin')
-
-    except Exception:
-        db.session.rollback()
-        print("Migration skipped due to missing columns or errors.")
-
-
 # ----------------------- CSRF ERROR HANDLER -----------------------
 from flask_wtf.csrf import CSRFError
 
@@ -678,7 +631,7 @@ def seed_db():
         superadmin = User(username='superadmin', email='isrogamers@gmail.com', role='superadmin', is_admin=True)
         superadmin.set_password('Isr@402209') # Ganti dengan password yang lebih aman atau buat interaktif
         db.session.add(superadmin)
-        click.echo(click.style("Akun superadmin dibuat: superadmin / super123", fg="yellow"))
+        click.echo(click.style("Akun superadmin 'superadmin' berhasil dibuat.", fg="yellow"))
     else:
         click.echo("Akun superadmin sudah ada.")
 
@@ -708,12 +661,10 @@ def init_db_command():
         db.create_all()
         click.echo(click.style('Database telah diinisialisasi ulang.', fg='green'))
 
+
+
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-        # Hapus pemanggilan ensure_admin() dan create_sample_products() dari sini
-        # Gunakan perintah 'flask seed-db' dari terminal sebagai gantinya.
-        # Inisialisasi database hanya dilakukan saat menjalankan aplikasi secara lokal.
-        # Di PythonAnywhere, gunakan 'flask init-db' dan 'flask seed-db' dari Bash console.
+    # Blok ini hanya untuk development lokal.
+    # Untuk production di PythonAnywhere, server WSGI yang akan menjalankan 'app'.
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=FLASK_DEBUG)
