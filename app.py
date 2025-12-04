@@ -1,7 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from flask_migrate import Migrate
 import secrets
 from functools import wraps
 from dotenv import load_dotenv
@@ -28,7 +27,7 @@ SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
 FLASK_DEBUG = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", 'sqlite:///parfume_demo.db')
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8) # A07: Session Management
 app.config['SECRET_KEY'] = SECRET_KEY
@@ -40,13 +39,15 @@ if not FLASK_DEBUG:
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax' # Melindungi dari CSRF
 
 db = SQLAlchemy(app)
-migrate = Migrate(app, db)
 csrf = CSRFProtect(app)
 limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["100 per day", "10 per hour"]
 )
+
+with app.app_context():
+    db.create_all()
 
 # ----------------------- Models -----------------------
 class User(db.Model):
