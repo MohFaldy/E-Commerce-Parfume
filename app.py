@@ -3,7 +3,6 @@ from waitress import serve
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import secrets
-from app import create_app
 from functools import wraps
 from dotenv import load_dotenv
 load_dotenv() # Memuat variabel dari file .env
