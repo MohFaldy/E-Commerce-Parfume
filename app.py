@@ -1,6 +1,5 @@
 import os
 from waitress import serve
-from app import db  # Impor aplikasi Flask Anda dari app.py
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import secrets
