@@ -1,4 +1,7 @@
 import os
+from waitress import serve
+from app import app  # Impor aplikasi Flask Anda dari app.py
+from app import db  # Impor aplikasi Flask Anda dari app.py
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import secrets
@@ -45,6 +48,9 @@ limiter = Limiter(
     app=app,
     default_limits=["100 per day", "10 per hour"]
 )
+
+with app.app_context():
+    db.create_all()
 
 
 # ----------------------- Models -----------------------
